@@ -6,6 +6,7 @@ import sqlite3
 import matplotlib.pyplot as plt
 import numpy as np
 from datetime import datetime
+import random
 
 bot = commands.Bot(command_prefix="/",
                    intents=disnake.Intents.all(),
@@ -14,10 +15,12 @@ bot = commands.Bot(command_prefix="/",
 with open('config.json') as f:
     config = json.load(f)
 
+answerChanse = 3
 token = config['botToken']
 version = config['version']
 useGifs = config['useGifs']
 useImages = config['useImages']
+
 
 #///////EVENTS///////#
 #-------------------->
@@ -25,13 +28,25 @@ useImages = config['useImages']
 async def on_ready():
     
     await loadBD()
-    
     print(f"Bot {bot.user} is ready to work!")
+
 
 @bot.event
 async def on_message(message):
+    
     await bot.process_commands(message)
     await writeMessageInSQL(message)
+    
+    if message.author == bot.user:
+        return
+    
+    global answerChanse
+    
+    chanse = random.randint(1, 10)
+    if chanse >= 10 - answerChanse:
+        await sayPhrase(message)
+
+    
 #///////COMMANDS///////#
 #---------------------->
 @bot.slash_command(description="Информация о сервере",)
@@ -45,23 +60,46 @@ async def info(inter):
     global version
     global useGifs
     global useImages
-    await inter.response.send_message(
-        f"Версия Бота: {version}\nИспользовать GIFs: {useGifs}\nИспользовать IMGs: {useImages}"
-    )
+    await inter.response.send_message(f'''Версия Бота: {version}\n
+                                        Использовать GIFs: {useGifs}\n
+                                        Использовать IMGs: {useImages}
+                                        ''')
 
+
+@bot.slash_command(description="Записать фразу в базу данных",)
+async def write(inter, phrase: str):
+
+    await writePharse(inter.guild.name, inter.author.name, phrase, inter.created_at)
+    await inter.send(f"Фраза записана", delete_after = 10)
+
+
+@bot.slash_command(description="Приказ боту говорить!",)
+async def say(inter):
+
+    randomPhrase = await getRandomPhrase()
+    await inter.send(randomPhrase)
+   
+  
 @bot.slash_command(description="Сформировать графики",)
 async def graphs(inter):
     
     # Устанавливаем соединение с базой данных
-    connection = sqlite3.connect('DBs/userMessages.db')
+    connection = sqlite3.connect('DBs/main.db')
     cursor = connection.cursor()
 
-    x = np.arange(5)
+    x = np.arange(10)
     height = []
     userNames = []
 
     date = datetime.now().date()
-   
+
+    #Особенность сервера
+    guildName = ""
+    if inter.guild.name == "ＰＯＴＡＳＯＦＫＡ":
+        guildName = "Potasofka"
+    else:
+        guildName = inter.guild.name
+    
     cursor.execute(f'''SELECT 
         guild,
         username,
@@ -70,14 +108,14 @@ async def graphs(inter):
         WHERE guild = "{inter.guild.name}"
         GROUP BY username
         ORDER BY countMessages DESC
-        LIMIT 5
+        LIMIT 10
         ''')
     all_results = cursor.fetchall()
     for row in all_results:
         height.append(row[2])
         userNames.append(row[1])
 
-    fig = plt.figure(figsize = (10, 5))
+    fig = plt.figure(figsize = (15, 5))
     
     plt.bar(x, height, width = 0.4)
     plt.title(f"Количество сообщений на сервере: {guildName}. Дата: {date}")
@@ -87,8 +125,8 @@ async def graphs(inter):
 
     plt.savefig(f"graphs/messages_{date}.png")
     #plt.show()
-
-    x = np.arange(10)
+    plt.close()
+    
     height = []
     words = []
 
@@ -96,16 +134,18 @@ async def graphs(inter):
         word,
         SUM(amount) AS amount_sum
         FROM words
-        WHERE guild = "ＰＯＴＡＳＯＦＫＡ"
+        WHERE guild = "{inter.guild.name}"
         GROUP BY word
         ORDER BY amount_sum DESC
         LIMIT 10
         ''')
     all_results = cursor.fetchall()
+    connection.close()
+    
     for row in all_results:
         height.append(row[1])
         words.append(row[0])
-
+    
     plt.bar(x, height, width = 0.4, color = "red")
     plt.title(f"Частота использований слов на сервере: {guildName}. Дата: {date}")
     plt.ylabel("кол-во")
@@ -114,7 +154,7 @@ async def graphs(inter):
 
     #plt.show()
     plt.savefig(f"graphs/words_{date}.png")
-
+    
     await inter.send(file = disnake.File(f"graphs/messages_{date}.png"))
     await inter.send(file = disnake.File(f"graphs/words_{date}.png"))
     
@@ -122,10 +162,10 @@ async def graphs(inter):
 #--------------------->
 async def loadBD():
     
-    connection = sqlite3.connect('DBs/userMessages.db')
+    connection = sqlite3.connect('DBs/main.db')
     cursor = connection.cursor()
 
-    # Создаем таблицу userMessages
+    # Создаем таблицу messages
     cursor.execute('''
     CREATE TABLE IF NOT EXISTS messages (
     id INTEGER PRIMARY KEY,
@@ -149,13 +189,41 @@ async def loadBD():
     )
     ''')
 
+    # Создаем таблицу phrases
+    cursor.execute('''
+    CREATE TABLE IF NOT EXISTS phrases (
+    id INTEGER PRIMARY KEY,
+    guild TEXT NOT NULL,
+    author TEXT NOT NULL,
+    phrase TEXT NOT NULL,
+    date DATE
+    )
+    ''')
+
     # Сохраняем изменения и закрываем соединение
     connection.commit()
+    connection.close()
+
+async def writePharse(guild, username, phrase, date):
+
+    connection = sqlite3.connect('DBs/main.db')
+    cursor = connection.cursor()
+    
+    #Запись сообщения
+    cursor.execute('''INSERT INTO phrases (
+                    guild,
+                    author,
+                    phrase,
+                    date)
+                    VALUES (?, ?, ?, ?)''',
+                    (guild, username, phrase.lower(), date))
+            
+    connection.commit() 
     connection.close()
     
 async def writeMessageInSQL(message):
 
-    connection = sqlite3.connect('DBs/userMessages.db')
+    connection = sqlite3.connect('DBs/main.db')
     cursor = connection.cursor()
 
     channel = message.channel.name
@@ -170,7 +238,15 @@ async def writeMessageInSQL(message):
 
     if len(words) > 0:
         #Запись сообщения
-        cursor.execute('INSERT INTO messages (guild, channel, username, message, date) VALUES (?, ?, ?, ?, ?)', (guild, channel, username, messageText.lower(), date))
+        cursor.execute('''INSERT INTO messages (
+                        guild,
+                        channel,
+                        username,
+                        message,
+                        date)
+                        VALUES (?, ?, ?, ?, ?)''',
+                       (guild, channel, username, messageText.lower(), date))
+        
         connection.commit()
         
     connection.close()
@@ -179,9 +255,12 @@ async def writeMessageInSQL(message):
         await updateWords(words, guild, username, date)
 
 async def updateWords(words, guild, username, date):
+
+    if username == bot.user.name:
+        return
     
     # Устанавливаем соединение с базой данных
-    connection = sqlite3.connect('DBs/userMessages.db')
+    connection = sqlite3.connect('DBs/main.db')
     cursor = connection.cursor()
 
     updateWords = []
@@ -217,6 +296,30 @@ async def updateWords(words, guild, username, date):
     connection.commit()
     connection.close()
     #cursor.execute('SELECT * FROM words;')
+
+async def getRandomPhrase():
+
+    # Устанавливаем соединение с базой данных
+    connection = sqlite3.connect('DBs/main.db')
+    cursor = connection.cursor()
+
+    cursor.execute('''SELECT 
+        id,
+        phrase
+        FROM phrases
+        ''')
+    all_results = cursor.fetchall()
+    connection.close()
+    randomNum = random.randint(1, len(all_results))
+    return all_results[randomNum - 1][1]
+
+
+async def sayPhrase(message):
+
+    randomPhrase = await getRandomPhrase()
+    await message.channel.send(randomPhrase)
+
+    
 #///////STARTING BOT///////#
 #-------------------------->    
 bot.run(token)
