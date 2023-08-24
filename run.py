@@ -10,7 +10,7 @@ import random
 
 bot = commands.Bot(command_prefix="/",
                    intents=disnake.Intents.all(),
-                   activity=disnake.Game(name="В разработке"))
+                   activity=disnake.Game(name="Minecraft 1.12.2"))
 
 with open('config.json') as f:
     config = json.load(f)
@@ -29,8 +29,7 @@ async def on_ready():
     
     await loadBD()
     print(f"Bot {bot.user} is ready to work!")
-
-
+    
 @bot.event
 async def on_message(message):
     
@@ -46,7 +45,11 @@ async def on_message(message):
     if chanse >= 10 - answerChanse:
         await sayPhrase(message)
 
-    
+
+@bot.event
+async def on_thread_member_join(member):
+    print(member)
+
 #///////COMMANDS///////#
 #---------------------->
 @bot.slash_command(description="Информация о сервере",)
@@ -69,8 +72,15 @@ async def info(inter):
 @bot.slash_command(description="Записать фразу в базу данных",)
 async def write(inter, phrase: str):
 
-    await writePharse(inter.guild.name, inter.author.name, phrase, inter.created_at)
+    await writePhrase(inter.guild.name, inter.author.name, phrase, inter.created_at)
     await inter.send(f"Фраза записана", delete_after = 10)
+
+
+@bot.slash_command(description="Записать анекдот в базу данных",)
+async def joke_write(inter, joke: str):
+
+    await writeJoke(inter.guild.name, inter.author.name, joke, inter.created_at)
+    await inter.send(f"Анекдот записан", delete_after = 10)
 
 
 @bot.slash_command(description="Приказ боту говорить!",)
@@ -78,7 +88,14 @@ async def say(inter):
 
     randomPhrase = await getRandomPhrase()
     await inter.send(randomPhrase)
-   
+
+
+@bot.slash_command(description="Вызвать анекдот",)
+async def joke(inter):
+
+    joke = await getRandomJoke()
+    await inter.send(joke)
+    
   
 @bot.slash_command(description="Сформировать графики",)
 async def graphs(inter):
@@ -87,7 +104,6 @@ async def graphs(inter):
     connection = sqlite3.connect('DBs/main.db')
     cursor = connection.cursor()
 
-    x = np.arange(10)
     height = []
     userNames = []
 
@@ -111,10 +127,13 @@ async def graphs(inter):
         LIMIT 10
         ''')
     all_results = cursor.fetchall()
+    col_num = 0
     for row in all_results:
         height.append(row[2])
         userNames.append(row[1])
+        col_num += 1
 
+    x = np.arange(col_num)
     fig = plt.figure(figsize = (15, 5))
     
     plt.bar(x, height, width = 0.4)
@@ -140,12 +159,13 @@ async def graphs(inter):
         LIMIT 10
         ''')
     all_results = cursor.fetchall()
-    connection.close()
-    
+    col_num = 0
     for row in all_results:
         height.append(row[1])
         words.append(row[0])
-    
+        col_num += 1
+
+    x = np.arange(col_num)
     plt.bar(x, height, width = 0.4, color = "red")
     plt.title(f"Частота использований слов на сервере: {guildName}. Дата: {date}")
     plt.ylabel("кол-во")
@@ -154,10 +174,44 @@ async def graphs(inter):
 
     #plt.show()
     plt.savefig(f"graphs/words_{date}.png")
+    plt.close()
+
+    height = []
+    words = []
+
+    cursor.execute(f'''SELECT 
+        author,
+        COUNT(phrase) as count_phrases
+        FROM phrases
+        WHERE guild = "{inter.guild.name}"
+        GROUP BY author
+        ORDER BY count_phrases DESC
+        LIMIT 10
+        ''')
+    all_results = cursor.fetchall()
+    connection.close()
+    col_num = 0
+    for row in all_results:
+        height.append(row[1])
+        words.append(row[0])
+        col_num += 1
+
+    x = np.arange(col_num)
+    plt.bar(x, height, width = 0.4, color = "green")
+    plt.title(f"Число загруженных фраз на сервере: {guildName}. Дата: {date}")
+    plt.ylabel("кол-во")
+    plt.xlabel("пользователь")
+    plt.xticks(x, words)
+
+    #plt.show()
+    plt.savefig(f"graphs/phrases_{date}.png")
+    plt.close()
     
     await inter.send(file = disnake.File(f"graphs/messages_{date}.png"))
     await inter.send(file = disnake.File(f"graphs/words_{date}.png"))
-    
+    await inter.send(file = disnake.File(f"graphs/phrases_{date}.png"))
+
+
 #///////SERVICE///////#
 #--------------------->
 async def loadBD():
@@ -200,11 +254,23 @@ async def loadBD():
     )
     ''')
 
+    # Создаем таблицу jokes
+    cursor.execute('''
+    CREATE TABLE IF NOT EXISTS jokes (
+    id INTEGER PRIMARY KEY,
+    guild TEXT NOT NULL,
+    author TEXT NOT NULL,
+    joke TEXT NOT NULL,
+    params INTEGER NOT NULL,
+    date DATE
+    )
+    ''')
+
     # Сохраняем изменения и закрываем соединение
     connection.commit()
     connection.close()
 
-async def writePharse(guild, username, phrase, date):
+async def writePhrase(guild, username, phrase, date):
 
     connection = sqlite3.connect('DBs/main.db')
     cursor = connection.cursor()
@@ -220,6 +286,30 @@ async def writePharse(guild, username, phrase, date):
             
     connection.commit() 
     connection.close()
+
+
+async def writeJoke(guild, username, joke, date):
+
+    connection = sqlite3.connect('DBs/main.db')
+    cursor = connection.cursor()
+
+    joke = joke.replace("[перенос]", "\n")
+    
+    countParams = joke.count("[вставка")
+    
+    #Запись сообщения
+    cursor.execute('''INSERT INTO jokes (
+                    guild,
+                    author,
+                    joke,
+                    params,
+                    date)
+                    VALUES (?, ?, ?, ?, ?)''',
+                    (guild, username, joke, countParams, date))
+            
+    connection.commit() 
+    connection.close()
+
     
 async def writeMessageInSQL(message):
 
@@ -314,12 +404,47 @@ async def getRandomPhrase():
     return all_results[randomNum - 1][1]
 
 
+async def getRandomJoke():
+
+    # Устанавливаем соединение с базой данных
+    connection = sqlite3.connect('DBs/main.db')
+    cursor = connection.cursor()
+
+    cursor.execute('''SELECT 
+        id,
+        joke,
+        params
+        FROM jokes
+        ''')
+    all_results = cursor.fetchall()
+    connection.close()
+    randomNum = random.randint(1, len(all_results))
+
+    jokeRow = all_results[randomNum - 1]
+    jokeText = jokeRow[1]
+    
+    params = 1
+    while params <= jokeRow[2]:
+        phrase = await getRandomPhrase()
+        jokeText = jokeText.replace(("[вставка" + str(params) + "]"), phrase)
+        params += 1
+    
+    return jokeText
+
+
 async def sayPhrase(message):
 
     randomPhrase = await getRandomPhrase()
-    await message.channel.send(randomPhrase)
 
-    
+    chanse = random.randint(0, 2)
+    if chanse == 0:
+        await message.channel.send(randomPhrase)
+    elif chanse == 1:
+        await message.channel.send(f"{message.author.mention} {randomPhrase}")
+    else:
+        randomPhrase1 = await getRandomPhrase()
+        await message.channel.send(f"А может {randomPhrase} и {randomPhrase1}")
+  
 #///////STARTING BOT///////#
 #-------------------------->    
 bot.run(token)
